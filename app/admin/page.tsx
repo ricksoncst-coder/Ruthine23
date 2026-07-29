@@ -29,12 +29,12 @@ async function compressImage(file: File, maxWidth = 1600, maxHeight = 1000): Pro
 
 async function uploadImage(blob: Blob, folder: string): Promise<string> {
   const path = `${folder}/${Date.now()}-${crypto.randomUUID()}.jpg`;
-  const { error } = await supabase.storage.from("restaurant-images").upload(path, blob, {
+  const { error } = await supabase.storage.from("menu-images").upload(path, blob, {
     contentType: "image/jpeg",
     upsert: false,
   });
   if (error) throw error;
-  return supabase.storage.from("restaurant-images").getPublicUrl(path).data.publicUrl;
+  return supabase.storage.from("menu-images").getPublicUrl(path).data.publicUrl;
 }
 
 export default function AdminPage() {
