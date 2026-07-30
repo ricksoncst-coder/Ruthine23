@@ -1,9 +1,8 @@
 "use client";
 
 import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
-import { defaultDishes, defaultSettings, Dish, RestaurantSettings } from "../lib/data";
-import { dishFromRow, settingsFromRow, supabase } from "../lib/supabase";
-
+import { defaultDishes, defaultSettings, Dish, RestaurantSettings } from "../../lib/data";
+import { dishFromRow, settingsFromRow, supabase } from "../../lib/supabase";
 type CartItem = Dish & { quantity: number };
 type OrderType = "pickup" | "delivery";
 
