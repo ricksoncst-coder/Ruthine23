@@ -20,20 +20,23 @@ export const metadata: Metadata = {
     "Indian Restaurant Sittensen",
     "Indische Küche Sittensen",
     "Costa's Indian Cuisine",
-    "Indisches Essen",
-    "Tandoori",
-    "Curry",
+    "Indisches Essen Sittensen",
+    "Tandoori Sittensen",
+    "Curry Sittensen",
     "Takeaway Sittensen",
-    "Lieferdienst Sittensen",
   ],
 
   authors: [{ name: "Costa's Indian Cuisine" }],
 
+  alternates: {
+    canonical: "https://www.costasindiancuisine.de/",
+  },
+
   openGraph: {
-    title: "Costa's Indian Cuisine | Sittensen",
+    title: "Costa's Indian Cuisine | Indisches Restaurant in Sittensen",
     description:
-      "Authentische indische Küche in Sittensen – frisch zubereitete Currys, Tandoori-Gerichte und indische Spezialitäten.",
-    url: "https://www.costasindiancuisine.de",
+      "Authentische indische Küche in Sittensen – Currys, Tandoori-Gerichte und indische Spezialitäten.",
+    url: "https://www.costasindiancuisine.de/",
     siteName: "Costa's Indian Cuisine",
     locale: "de_DE",
     type: "website",
@@ -42,7 +45,7 @@ export const metadata: Metadata = {
         url: "/logo-whatsapp.png",
         width: 1200,
         height: 1200,
-        alt: "Costa's Indian Cuisine Sittensen",
+        alt: "Costa's Indian Cuisine – Indisches Restaurant in Sittensen",
       },
     ],
   },
@@ -50,8 +53,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Costa's Indian Cuisine | Sittensen",
-    description:
-      "Authentische indische Küche in Sittensen.",
+    description: "Authentische indische Küche in Sittensen.",
     images: ["/logo-whatsapp.png"],
   },
 
@@ -65,13 +67,35 @@ const restaurantJsonLd = {
   "@context": "https://schema.org",
   "@type": "Restaurant",
   name: "Costa's Indian Cuisine",
-  url: "https://www.costasindiancuisine.de",
-  servesCuisine: ["Indisch", "Indian"],
+  url: "https://www.costasindiancuisine.de/",
+  telephone: "+49 4282 5089698",
+  image: "https://www.costasindiancuisine.de/logo-whatsapp.png",
+  priceRange: "€€",
+  servesCuisine: ["Indische Küche", "Indian Cuisine"],
+
   address: {
     "@type": "PostalAddress",
+    streetAddress: "Am Markt 12",
+    postalCode: "27419",
     addressLocality: "Sittensen",
     addressCountry: "DE",
   },
+
+  openingHoursSpecification: [
+    {
+      "@type": "OpeningHoursSpecification",
+      dayOfWeek: [
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+      ],
+      opens: "17:00",
+      closes: "22:00",
+    },
+  ],
 };
 
 export default function RootLayout({
