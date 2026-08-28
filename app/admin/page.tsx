@@ -8,23 +8,55 @@ import {
   useRef,
   useState,
 } from "react";
+
 import {
   defaultDishes,
   defaultSettings,
   Dish,
-  DISHES_KEY,
   RestaurantSettings,
-  SETTINGS_KEY,
 } from "../../lib/data";
 
-const CATEGORIES_KEY = "costas_categories_v2";
+import {
+  dishFromRow,
+  dishToRow,
+  settingsFromRow,
+  settingsToRow,
+  supabase,
+} from "../../lib/supabase";
+
 const ADMIN_SESSION_KEY = "costas_admin";
 const ADMIN_PIN = "2026";
 
+function uniqueCategories(dishes: Dish[]): string[] {
+  return Array.from(
+    new Set(
+      dishes
+        .map((dish) => dish.category?.trim())
+        .filter((category): category is string => Boolean(category))
+    )
+  );
+}
+
+function makeNewDish(category: string): Dish {
+  return {
+    id: Date.now(),
+    name: "Neues Gericht",
+    category,
+    description: "",
+    price: 0,
+    icon: "🍽️",
+    image: "",
+    vegetarian: false,
+    vegan: false,
+    spicy: false,
+    active: true,
+  };
+}
+
 async function compressImage(
   file: File,
-  maxWidth = 1600,
-  maxHeight = 1000
+  maxWidth = 1200,
+  maxHeight = 900
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -46,17 +78,20 @@ async function compressImage(
         );
 
         const canvas = document.createElement("canvas");
+
         canvas.width = Math.round(image.width * scale);
         canvas.height = Math.round(image.height * scale);
 
         const context = canvas.getContext("2d");
+
         if (!context) {
           reject(new Error("Bildverarbeitung ist nicht verfügbar."));
           return;
         }
 
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL("image/jpeg", 0.82));
+
+        resolve(canvas.toDataURL("image/jpeg", 0.78));
       };
 
       image.src = String(reader.result);
@@ -66,35 +101,10 @@ async function compressImage(
   });
 }
 
-function uniqueCategories(dishes: Dish[]): string[] {
-  return Array.from(
-    new Set(
-      dishes
-        .map((dish) => dish.category?.trim())
-        .filter((category): category is string => Boolean(category))
-    )
-  );
-}
-
-function makeNewDish(category: string): Dish {
-  return {
-    id: Date.now(),
-    name: "Neues Gericht",
-    category,
-    description: "Beschreibung des Gerichts",
-    price: 0,
-    icon: "🍽️",
-    image: "",
-    vegetarian: false,
-    vegan: false,
-    spicy: false,
-    active: true,
-  };
-}
-
 export default function AdminPage() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [pin, setPin] = useState("");
+
   const [dishes, setDishes] = useState<Dish[]>(defaultDishes);
   const [settings, setSettings] =
     useState<RestaurantSettings>(defaultSettings);
@@ -102,55 +112,78 @@ export default function AdminPage() {
   const [categories, setCategories] = useState<string[]>(
     uniqueCategories(defaultDishes)
   );
-  const [newCategory, setNewCategory] = useState("");
+
   const [categoryFilter, setCategoryFilter] = useState("Alle");
+  const [newCategory, setNewCategory] = useState("");
   const [dishSearch, setDishSearch] = useState("");
 
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    setLoggedIn(sessionStorage.getItem(ADMIN_SESSION_KEY) === "yes");
+
+    loadFromSupabase();
+  }, []);
+
+  async function loadFromSupabase() {
+    setLoading(true);
+    setMessage("");
+
     try {
-      const storedDishes = localStorage.getItem(DISHES_KEY);
-      const storedSettings = localStorage.getItem(SETTINGS_KEY);
-      const storedCategories = localStorage.getItem(CATEGORIES_KEY);
+      const [settingsResult, dishesResult] = await Promise.all([
+        supabase
+          .from("restaurant_settings")
+          .select("*")
+          .eq("id", 1)
+          .maybeSingle(),
 
-      const loadedDishes: Dish[] = storedDishes
-        ? JSON.parse(storedDishes)
-        : defaultDishes;
+        supabase
+          .from("dishes")
+          .select("*")
+          .order("id"),
+      ]);
 
-      setDishes(loadedDishes);
+      if (settingsResult.error) {
+        throw settingsResult.error;
+      }
 
-      if (storedSettings) {
+      if (dishesResult.error) {
+        throw dishesResult.error;
+      }
+
+      if (settingsResult.data) {
         setSettings({
           ...defaultSettings,
-          ...JSON.parse(storedSettings),
+          ...settingsFromRow(settingsResult.data),
         });
       }
 
-      if (storedCategories) {
-        const parsedCategories = JSON.parse(storedCategories);
-        if (Array.isArray(parsedCategories)) {
-          setCategories(
-            parsedCategories.filter(
-              (item): item is string =>
-                typeof item === "string" && item.trim().length > 0
-            )
-          );
-        }
-      } else {
+      if (dishesResult.data && dishesResult.data.length > 0) {
+        const loadedDishes = dishesResult.data.map(dishFromRow);
+
+        setDishes(loadedDishes);
         setCategories(uniqueCategories(loadedDishes));
+      } else {
+        setDishes(defaultDishes);
+        setCategories(uniqueCategories(defaultDishes));
       }
 
-      setLoggedIn(sessionStorage.getItem(ADMIN_SESSION_KEY) === "yes");
-    } catch {
+      setIsDirty(false);
+    } catch (error) {
+      console.error(error);
+
       setMessage(
-        "Gespeicherte Daten konnten nicht geladen werden. Standarddaten sind aktiv."
+        "Daten konnten nicht von Supabase geladen werden. Standarddaten werden angezeigt."
       );
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }
 
   const filteredDishes = useMemo(() => {
     const term = dishSearch.trim().toLocaleLowerCase("de-DE");
@@ -169,7 +202,9 @@ export default function AdminPage() {
     });
   }, [dishes, categoryFilter, dishSearch]);
 
-  function markChanged(text = "Änderung vorbereitet. Bitte speichern.") {
+  function markChanged(
+    text = "Änderung vorbereitet. Bitte anschließend speichern."
+  ) {
     setIsDirty(true);
     setMessage(text);
   }
@@ -185,7 +220,7 @@ export default function AdminPage() {
       return;
     }
 
-    setMessage("Falsche PIN. Standard-PIN: 2026");
+    setMessage("Falsche PIN.");
   }
 
   function logout() {
@@ -194,20 +229,77 @@ export default function AdminPage() {
     setPin("");
   }
 
-  function save() {
+  async function save() {
+    if (saving) return;
+
+    setSaving(true);
+    setMessage("Wird gespeichert …");
+
     try {
-      localStorage.setItem(DISHES_KEY, JSON.stringify(dishes));
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-      localStorage.setItem(CATEGORIES_KEY, JSON.stringify(categories));
+      const settingsResult = await supabase
+        .from("restaurant_settings")
+        .upsert(settingsToRow(settings), {
+          onConflict: "id",
+        });
+
+      if (settingsResult.error) {
+        throw settingsResult.error;
+      }
+
+      const existingResult = await supabase
+        .from("dishes")
+        .select("id");
+
+      if (existingResult.error) {
+        throw existingResult.error;
+      }
+
+      const existingIds = (existingResult.data ?? []).map((row) =>
+        Number(row.id)
+      );
+
+      const currentIds = dishes.map((dish) => dish.id);
+
+      const removedIds = existingIds.filter(
+        (id) => !currentIds.includes(id)
+      );
+
+      if (removedIds.length > 0) {
+        const deleteResult = await supabase
+          .from("dishes")
+          .delete()
+          .in("id", removedIds);
+
+        if (deleteResult.error) {
+          throw deleteResult.error;
+        }
+      }
+
+      if (dishes.length > 0) {
+        const dishesResult = await supabase
+          .from("dishes")
+          .upsert(dishes.map(dishToRow), {
+            onConflict: "id",
+          });
+
+        if (dishesResult.error) {
+          throw dishesResult.error;
+        }
+      }
 
       setIsDirty(false);
-      setMessage(
-        "Alles gespeichert. Lade die Startseite neu, damit die Änderungen sichtbar werden."
-      );
-    } catch {
-      setMessage(
-        "Speichern fehlgeschlagen. Ein Bild ist möglicherweise zu groß."
-      );
+      setMessage("✓ Alles online gespeichert.");
+    } catch (error) {
+      console.error(error);
+
+      const text =
+        error instanceof Error
+          ? error.message
+          : "Unbekannter Fehler";
+
+      setMessage(`Speichern fehlgeschlagen: ${text}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -219,6 +311,7 @@ export default function AdminPage() {
       ...current,
       [field]: value,
     }));
+
     markChanged();
   }
 
@@ -229,27 +322,35 @@ export default function AdminPage() {
   ) {
     setDishes((current) =>
       current.map((dish) =>
-        dish.id === id ? { ...dish, [field]: value } : dish
+        dish.id === id
+          ? {
+              ...dish,
+              [field]: value,
+            }
+          : dish
       )
     );
+
     markChanged();
   }
 
   function addDish() {
-    const fallbackCategory =
+    const category =
       categoryFilter !== "Alle"
         ? categoryFilter
         : categories[0] || "Neue Kategorie";
 
-    if (!categories.includes(fallbackCategory)) {
-      setCategories((current) => [...current, fallbackCategory]);
+    if (!categories.includes(category)) {
+      setCategories((current) => [...current, category]);
     }
 
-    const dish = makeNewDish(fallbackCategory);
+    const dish = makeNewDish(category);
+
     setDishes((current) => [dish, ...current]);
-    setCategoryFilter(fallbackCategory);
+    setCategoryFilter(category);
     setDishSearch("");
-    markChanged("Neues Gericht wurde angelegt. Bitte ausfüllen und speichern.");
+
+    markChanged("Neues Gericht angelegt. Bitte ausfüllen und speichern.");
   }
 
   function duplicateDish(dish: Dish) {
@@ -260,16 +361,20 @@ export default function AdminPage() {
     };
 
     setDishes((current) => [copy, ...current]);
-    setCategoryFilter(dish.category);
-    setDishSearch("");
-    markChanged("Gericht wurde dupliziert. Bitte speichern.");
+
+    markChanged("Gericht dupliziert. Bitte speichern.");
   }
 
   function deleteDish(id: number, name: string) {
-    if (!window.confirm(`Gericht „${name}“ wirklich löschen?`)) return;
+    if (!window.confirm(`Gericht „${name}“ wirklich löschen?`)) {
+      return;
+    }
 
-    setDishes((current) => current.filter((dish) => dish.id !== id));
-    markChanged("Gericht wurde entfernt. Bitte speichern.");
+    setDishes((current) =>
+      current.filter((dish) => dish.id !== id)
+    );
+
+    markChanged("Gericht entfernt. Bitte speichern.");
   }
 
   function addCategory(event: FormEvent<HTMLFormElement>) {
@@ -282,13 +387,13 @@ export default function AdminPage() {
       return;
     }
 
-    const alreadyExists = categories.some(
+    const exists = categories.some(
       (item) =>
         item.toLocaleLowerCase("de-DE") ===
         category.toLocaleLowerCase("de-DE")
     );
 
-    if (alreadyExists) {
+    if (exists) {
       setMessage("Diese Kategorie existiert bereits.");
       return;
     }
@@ -296,8 +401,9 @@ export default function AdminPage() {
     setCategories((current) => [...current, category]);
     setNewCategory("");
     setCategoryFilter(category);
+
     markChanged(
-      `Kategorie „${category}“ wurde angelegt. Jetzt kannst du ein Gericht hinzufügen.`
+      `Kategorie „${category}“ angelegt. Jetzt kannst du ein Gericht hinzufügen.`
     );
   }
 
@@ -321,18 +427,23 @@ export default function AdminPage() {
     );
 
     if (duplicate) {
-      setMessage("Eine Kategorie mit diesem Namen existiert bereits.");
+      setMessage("Diese Kategorie existiert bereits.");
       return;
     }
 
     setCategories((current) =>
-      current.map((item) => (item === oldName ? newName : item))
+      current.map((item) =>
+        item === oldName ? newName : item
+      )
     );
 
     setDishes((current) =>
       current.map((dish) =>
         dish.category === oldName
-          ? { ...dish, category: newName }
+          ? {
+              ...dish,
+              category: newName,
+            }
           : dish
       )
     );
@@ -342,23 +453,23 @@ export default function AdminPage() {
     }
 
     markChanged(
-      `Kategorie „${oldName}“ wurde in „${newName}“ umbenannt.`
+      `Kategorie „${oldName}“ wurde umbenannt.`
     );
   }
 
   function deleteCategory(category: string) {
-    const dishesInCategory = dishes.filter(
+    const count = dishes.filter(
       (dish) => dish.category === category
-    );
+    ).length;
 
-    if (dishesInCategory.length > 0) {
+    if (count > 0) {
       setMessage(
-        `Kategorie kann nicht gelöscht werden: ${dishesInCategory.length} Gericht(e) sind noch darin. Verschiebe oder lösche diese Gerichte zuerst.`
+        `Kategorie kann nicht gelöscht werden. Noch ${count} Gericht(e) vorhanden.`
       );
       return;
     }
 
-    if (!window.confirm(`Kategorie „${category}“ wirklich löschen?`)) {
+    if (!window.confirm(`Kategorie „${category}“ löschen?`)) {
       return;
     }
 
@@ -370,7 +481,7 @@ export default function AdminPage() {
       setCategoryFilter("Alle");
     }
 
-    markChanged(`Kategorie „${category}“ wurde gelöscht.`);
+    markChanged();
   }
 
   async function uploadSettingImage(
@@ -378,22 +489,28 @@ export default function AdminPage() {
     field: "heroImage" | "logoImage"
   ) {
     const file = event.target.files?.[0];
+
     if (!file) return;
 
     try {
+      setMessage("Bild wird verarbeitet …");
+
       const image = await compressImage(
         file,
-        field === "logoImage" ? 700 : 1800,
-        field === "logoImage" ? 700 : 1100
+        field === "logoImage" ? 700 : 1600,
+        field === "logoImage" ? 700 : 1000
       );
 
       updateSettings(field, image);
-      setMessage("Bild vorbereitet. Bitte noch „Alles speichern“ drücken.");
+
+      setMessage(
+        "Bild vorbereitet. Jetzt bitte „Alles speichern“ drücken."
+      );
     } catch (error) {
       setMessage(
         error instanceof Error
           ? error.message
-          : "Bild konnte nicht geladen werden."
+          : "Bild konnte nicht verarbeitet werden."
       );
     }
 
@@ -405,12 +522,19 @@ export default function AdminPage() {
     id: number
   ) {
     const file = event.target.files?.[0];
+
     if (!file) return;
 
     try {
-      const image = await compressImage(file, 1000, 800);
+      setMessage("Gerichtsfoto wird verarbeitet …");
+
+      const image = await compressImage(file, 900, 700);
+
       updateDish(id, "image", image);
-      setMessage("Gerichtsfoto vorbereitet. Bitte speichern.");
+
+      setMessage(
+        "Gerichtsfoto vorbereitet. Bitte speichern."
+      );
     } catch {
       setMessage("Gerichtsfoto konnte nicht verarbeitet werden.");
     }
@@ -432,10 +556,13 @@ export default function AdminPage() {
           2
         ),
       ],
-      { type: "application/json" }
+      {
+        type: "application/json",
+      }
     );
 
     const url = URL.createObjectURL(blob);
+
     const link = document.createElement("a");
 
     link.href = url;
@@ -445,8 +572,11 @@ export default function AdminPage() {
     URL.revokeObjectURL(url);
   }
 
-  function importBackup(event: ChangeEvent<HTMLInputElement>) {
+  function importBackup(
+    event: ChangeEvent<HTMLInputElement>
+  ) {
     const file = event.target.files?.[0];
+
     if (!file) return;
 
     const reader = new FileReader();
@@ -473,46 +603,33 @@ export default function AdminPage() {
         }
 
         setIsDirty(true);
-        setMessage("Sicherung geladen. Bitte jetzt alles speichern.");
+
+        setMessage(
+          "Sicherung geladen. Bitte jetzt online speichern."
+        );
       } catch {
         setMessage("Diese Sicherungsdatei ist ungültig.");
       }
     };
 
     reader.readAsText(file);
+
     event.target.value = "";
-  }
-
-  function resetEverything() {
-    if (
-      !window.confirm(
-        "Wirklich alle Änderungen löschen und Standardwerte wiederherstellen?"
-      )
-    ) {
-      return;
-    }
-
-    localStorage.removeItem(DISHES_KEY);
-    localStorage.removeItem(SETTINGS_KEY);
-    localStorage.removeItem(CATEGORIES_KEY);
-
-    setDishes(defaultDishes);
-    setSettings(defaultSettings);
-    setCategories(uniqueCategories(defaultDishes));
-    setCategoryFilter("Alle");
-    setDishSearch("");
-    setIsDirty(false);
-    setMessage("Standardwerte wurden wiederhergestellt.");
   }
 
   if (!loggedIn) {
     return (
       <main className="admin-shell">
-        <form className="admin-login" onSubmit={login}>
-          <span className="brand-mark">C</span>
-          <h1>Admin-Bereich</h1>
+        <form
+          className="admin-login"
+          onSubmit={login}
+        >
+          <div className="admin-logo">C</div>
+
+          <h1>Costa&apos;s Admin</h1>
+
           <p>
-            Restaurant, Kategorien, Gerichte, Bilder und Preise verwalten.
+            Restaurant und Speisekarte verwalten
           </p>
 
           <label>
@@ -520,20 +637,29 @@ export default function AdminPage() {
             <input
               type="password"
               value={pin}
-              onChange={(event) => setPin(event.target.value)}
-              autoFocus
+              onChange={(event) =>
+                setPin(event.target.value)
+              }
               inputMode="numeric"
+              autoFocus
             />
           </label>
 
-          <button className="button primary full" type="submit">
+          <button
+            className="button primary full"
+            type="submit"
+          >
             Anmelden
           </button>
 
-          {message && <p className="admin-message">{message}</p>}
+          {message && (
+            <p className="admin-message">{message}</p>
+          )}
 
           <a href="/">← Zur Website</a>
         </form>
+
+        <AdminStyles />
       </main>
     );
   }
@@ -541,20 +667,41 @@ export default function AdminPage() {
   return (
     <main className="admin-shell">
       <div className="admin-page">
-        <div className="admin-top">
+
+        <header className="admin-header">
           <div>
-            <p className="eyebrow dark">Website-Editor</p>
+            <p className="admin-eyebrow">
+              Costa&apos;s Indian Cuisine
+            </p>
+
             <h1>Website bearbeiten</h1>
+
             <p className="admin-subtitle">
-              {dishes.length} Gerichte · {categories.length} Kategorien
-              {isDirty ? " · Ungespeicherte Änderungen" : ""}
+              {dishes.length} Gerichte ·{" "}
+              {categories.length} Kategorien
+              {isDirty
+                ? " · Änderungen noch nicht gespeichert"
+                : " · Alles gespeichert"}
             </p>
           </div>
 
           <div className="admin-actions">
-            <a className="button outline" href="/" target="_blank">
+            <a
+              className="button outline"
+              href="/"
+              target="_blank"
+            >
               Website ansehen
             </a>
+
+            <button
+              className="button outline"
+              type="button"
+              onClick={loadFromSupabase}
+            >
+              Neu laden
+            </button>
+
             <button
               className="button outline"
               type="button"
@@ -562,20 +709,34 @@ export default function AdminPage() {
             >
               Abmelden
             </button>
+
             <button
               className="button primary"
               type="button"
+              disabled={saving}
               onClick={save}
             >
-              Alles speichern
+              {saving
+                ? "Speichert …"
+                : "Alles speichern"}
             </button>
           </div>
-        </div>
+        </header>
 
-        {message && <div className="admin-message">{message}</div>}
+        {loading && (
+          <div className="admin-message">
+            Daten werden geladen …
+          </div>
+        )}
+
+        {message && (
+          <div className="admin-message">
+            {message}
+          </div>
+        )}
 
         <section className="admin-card">
-          <h2>Design & Startseite</h2>
+          <h2>Restaurant</h2>
 
           <div className="admin-grid">
             <label>
@@ -583,7 +744,10 @@ export default function AdminPage() {
               <input
                 value={settings.name}
                 onChange={(event) =>
-                  updateSettings("name", event.target.value)
+                  updateSettings(
+                    "name",
+                    event.target.value
+                  )
                 }
               />
             </label>
@@ -593,27 +757,115 @@ export default function AdminPage() {
               <input
                 value={settings.shortName}
                 onChange={(event) =>
-                  updateSettings("shortName", event.target.value)
+                  updateSettings(
+                    "shortName",
+                    event.target.value
+                  )
                 }
               />
             </label>
 
-            <label>
-              Große Überschrift
+            <label className="wide">
+              Überschrift
               <input
                 value={settings.heroTitle}
                 onChange={(event) =>
-                  updateSettings("heroTitle", event.target.value)
+                  updateSettings(
+                    "heroTitle",
+                    event.target.value
+                  )
                 }
               />
             </label>
 
-            <label>
+            <label className="wide">
               Slogan
               <input
                 value={settings.slogan}
                 onChange={(event) =>
-                  updateSettings("slogan", event.target.value)
+                  updateSettings(
+                    "slogan",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              Telefon
+              <input
+                value={settings.phone}
+                onChange={(event) =>
+                  updateSettings(
+                    "phone",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              WhatsApp
+              <input
+                value={settings.whatsapp}
+                onChange={(event) =>
+                  updateSettings(
+                    "whatsapp",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              E-Mail
+              <input
+                type="email"
+                value={settings.email}
+                onChange={(event) =>
+                  updateSettings(
+                    "email",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              Straße
+              <input
+                value={settings.street}
+                onChange={(event) =>
+                  updateSettings(
+                    "street",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              PLZ / Ort
+              <input
+                value={settings.city}
+                onChange={(event) =>
+                  updateSettings(
+                    "city",
+                    event.target.value
+                  )
+                }
+              />
+            </label>
+
+            <label>
+              Öffnungszeiten
+              <input
+                value={settings.openingHours}
+                onChange={(event) =>
+                  updateSettings(
+                    "openingHours",
+                    event.target.value
+                  )
                 }
               />
             </label>
@@ -624,28 +876,33 @@ export default function AdminPage() {
                 type="color"
                 value={settings.primaryColor}
                 onChange={(event) =>
-                  updateSettings("primaryColor", event.target.value)
+                  updateSettings(
+                    "primaryColor",
+                    event.target.value
+                  )
                 }
               />
             </label>
           </div>
+        </section>
 
-          <div className="image-editor-grid">
-            <div className="image-editor">
+        <section className="admin-card">
+          <h2>Bilder</h2>
+
+          <div className="image-grid">
+            <div className="image-box">
               <h3>Hintergrundbild</h3>
 
-              <div
-                className="image-preview hero-preview"
-                style={
-                  settings.heroImage
-                    ? {
-                        backgroundImage: `url(${settings.heroImage})`,
-                      }
-                    : undefined
-                }
-              >
-                {!settings.heroImage && <span>Noch kein Bild</span>}
-              </div>
+              {settings.heroImage ? (
+                <img
+                  src={settings.heroImage}
+                  alt="Hintergrund"
+                />
+              ) : (
+                <div className="image-placeholder">
+                  Kein Bild
+                </div>
+              )}
 
               <label className="upload-button">
                 Bild auswählen
@@ -653,35 +910,28 @@ export default function AdminPage() {
                   type="file"
                   accept="image/*"
                   onChange={(event) =>
-                    uploadSettingImage(event, "heroImage")
+                    uploadSettingImage(
+                      event,
+                      "heroImage"
+                    )
                   }
                 />
               </label>
-
-              {settings.heroImage && (
-                <button
-                  className="delete-button"
-                  type="button"
-                  onClick={() => updateSettings("heroImage", "")}
-                >
-                  Bild entfernen
-                </button>
-              )}
             </div>
 
-            <div className="image-editor">
+            <div className="image-box">
               <h3>Logo</h3>
 
-              <div className="image-preview logo-preview">
-                {settings.logoImage ? (
-                  <img
-                    src={settings.logoImage}
-                    alt="Logo Vorschau"
-                  />
-                ) : (
-                  <span>Noch kein Logo</span>
-                )}
-              </div>
+              {settings.logoImage ? (
+                <img
+                  src={settings.logoImage}
+                  alt="Logo"
+                />
+              ) : (
+                <div className="image-placeholder">
+                  Kein Logo
+                </div>
+              )}
 
               <label className="upload-button">
                 Logo auswählen
@@ -689,105 +939,22 @@ export default function AdminPage() {
                   type="file"
                   accept="image/*"
                   onChange={(event) =>
-                    uploadSettingImage(event, "logoImage")
+                    uploadSettingImage(
+                      event,
+                      "logoImage"
+                    )
                   }
                 />
               </label>
-
-              {settings.logoImage && (
-                <button
-                  className="delete-button"
-                  type="button"
-                  onClick={() => updateSettings("logoImage", "")}
-                >
-                  Logo entfernen
-                </button>
-              )}
             </div>
           </div>
         </section>
 
         <section className="admin-card">
-          <h2>Restaurant-Daten</h2>
-
-          <div className="admin-grid">
-            <label>
-              Telefon
-              <input
-                value={settings.phone}
-                onChange={(event) =>
-                  updateSettings("phone", event.target.value)
-                }
-              />
-            </label>
-
-            <label>
-              WhatsApp mit Ländercode
-              <input
-                value={settings.whatsapp}
-                onChange={(event) =>
-                  updateSettings("whatsapp", event.target.value)
-                }
-                placeholder="491234567890"
-              />
-            </label>
-
-            <label>
-              E-Mail
-              <input
-                type="email"
-                value={settings.email}
-                onChange={(event) =>
-                  updateSettings("email", event.target.value)
-                }
-              />
-            </label>
-
-            <label>
-              Straße
-              <input
-                value={settings.street}
-                onChange={(event) =>
-                  updateSettings("street", event.target.value)
-                }
-              />
-            </label>
-
-            <label>
-              PLZ / Ort
-              <input
-                value={settings.city}
-                onChange={(event) =>
-                  updateSettings("city", event.target.value)
-                }
-              />
-            </label>
-
-            <label>
-              Öffnungszeiten
-              <input
-                value={settings.openingHours}
-                onChange={(event) =>
-                  updateSettings("openingHours", event.target.value)
-                }
-              />
-            </label>
-          </div>
-        </section>
-
-        <section className="admin-card">
-          <div className="admin-section-head">
-            <div>
-              <h2>Kategorien</h2>
-              <p>
-                Neue Kategorien anlegen, umbenennen oder leere Kategorien
-                löschen.
-              </p>
-            </div>
-          </div>
+          <h2>Kategorien</h2>
 
           <form
-            className="category-create-form"
+            className="category-form"
             onSubmit={addCategory}
           >
             <input
@@ -795,47 +962,57 @@ export default function AdminPage() {
               onChange={(event) =>
                 setNewCategory(event.target.value)
               }
-              placeholder="Zum Beispiel: Tandoori Spezialitäten"
+              placeholder="Neue Kategorie"
             />
-            <button className="button primary" type="submit">
-              + Kategorie hinzufügen
+
+            <button
+              className="button primary"
+              type="submit"
+            >
+              + Kategorie
             </button>
           </form>
 
-          <div className="category-manager-list">
+          <div className="category-list">
             {categories.map((category) => {
               const count = dishes.filter(
-                (dish) => dish.category === category
+                (dish) =>
+                  dish.category === category
               ).length;
 
               return (
-                <div className="category-manager-item" key={category}>
+                <div
+                  className="category-item"
+                  key={category}
+                >
                   <div>
                     <strong>{category}</strong>
                     <small>
-                      {count} {count === 1 ? "Gericht" : "Gerichte"}
+                      {count}{" "}
+                      {count === 1
+                        ? "Gericht"
+                        : "Gerichte"}
                     </small>
                   </div>
 
-                  <div className="category-manager-actions">
+                  <div className="row-actions">
                     <button
-                      className="button outline compact"
+                      className="button outline small"
                       type="button"
-                      onClick={() => renameCategory(category)}
+                      onClick={() =>
+                        renameCategory(category)
+                      }
                     >
                       Umbenennen
                     </button>
 
                     <button
-                      className="delete-button"
+                      className="danger small"
                       type="button"
                       disabled={count > 0}
-                      title={
-                        count > 0
-                          ? "Verschiebe oder lösche zuerst alle Gerichte."
-                          : "Kategorie löschen"
+                      onClick={() =>
+                        deleteCategory(category)
                       }
-                      onClick={() => deleteCategory(category)}
                     >
                       Löschen
                     </button>
@@ -843,20 +1020,15 @@ export default function AdminPage() {
                 </div>
               );
             })}
-
-            {!categories.length && (
-              <p>Noch keine Kategorie vorhanden.</p>
-            )}
           </div>
         </section>
 
         <section className="admin-card">
-          <div className="admin-section-head">
+          <div className="section-head">
             <div>
               <h2>Speisekarte</h2>
               <p>
-                Neue Gerichte hinzufügen, Kategorie ändern, Bilder
-                hochladen und Preise bearbeiten.
+                Gerichte, Preise und Bilder bearbeiten
               </p>
             </div>
 
@@ -869,75 +1041,77 @@ export default function AdminPage() {
             </button>
           </div>
 
-          <div className="dish-admin-toolbar">
-            <label>
-              Gerichte suchen
-              <input
-                value={dishSearch}
-                onChange={(event) =>
-                  setDishSearch(event.target.value)
-                }
-                placeholder="Name, Beschreibung oder Kategorie"
-              />
-            </label>
+          <div className="toolbar">
+            <input
+              value={dishSearch}
+              onChange={(event) =>
+                setDishSearch(event.target.value)
+              }
+              placeholder="Gericht suchen …"
+            />
 
-            <label>
-              Kategorie anzeigen
-              <select
-                value={categoryFilter}
-                onChange={(event) =>
-                  setCategoryFilter(event.target.value)
-                }
-              >
-                <option value="Alle">Alle Kategorien</option>
-                {categories.map((category) => (
-                  <option value={category} key={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <select
+              value={categoryFilter}
+              onChange={(event) =>
+                setCategoryFilter(
+                  event.target.value
+                )
+              }
+            >
+              <option value="Alle">
+                Alle Kategorien
+              </option>
+
+              {categories.map((category) => (
+                <option
+                  value={category}
+                  key={category}
+                >
+                  {category}
+                </option>
+              ))}
+            </select>
           </div>
 
-          <p className="dish-result-count">
-            {filteredDishes.length} von {dishes.length} Gerichten
+          <p className="result-count">
+            {filteredDishes.length} von{" "}
+            {dishes.length} Gerichten
           </p>
 
-          <div className="admin-dishes">
+          <div className="dish-list">
             {filteredDishes.map((dish) => (
-              <article className="admin-dish improved" key={dish.id}>
-                <div className="dish-image-admin">
+              <article
+                className="dish-card"
+                key={dish.id}
+              >
+                <div className="dish-image">
                   {dish.image ? (
-                    <img src={dish.image} alt={dish.name} />
+                    <img
+                      src={dish.image}
+                      alt={dish.name}
+                    />
                   ) : (
-                    <span>{dish.icon || "🍽️"}</span>
+                    <span>
+                      {dish.icon || "🍽️"}
+                    </span>
                   )}
 
-                  <label>
-                    Foto
+                  <label className="upload-small">
+                    Foto ändern
                     <input
                       type="file"
                       accept="image/*"
                       onChange={(event) =>
-                        uploadDishImage(event, dish.id)
+                        uploadDishImage(
+                          event,
+                          dish.id
+                        )
                       }
                     />
                   </label>
-
-                  {dish.image && (
-                    <button
-                      className="small-remove-image"
-                      type="button"
-                      onClick={() =>
-                        updateDish(dish.id, "image", "")
-                      }
-                    >
-                      Foto entfernen
-                    </button>
-                  )}
                 </div>
 
-                <div className="admin-dish-fields">
+                <div className="dish-fields">
                   <label>
                     Name
                     <input
@@ -949,7 +1123,6 @@ export default function AdminPage() {
                           event.target.value
                         )
                       }
-                      placeholder="Gericht"
                     />
                   </label>
 
@@ -965,16 +1138,15 @@ export default function AdminPage() {
                         )
                       }
                     >
-                      {categories.map((category) => (
-                        <option value={category} key={category}>
-                          {category}
-                        </option>
-                      ))}
-
-                      {!categories.includes(dish.category) && (
-                        <option value={dish.category}>
-                          {dish.category}
-                        </option>
+                      {categories.map(
+                        (category) => (
+                          <option
+                            value={category}
+                            key={category}
+                          >
+                            {category}
+                          </option>
+                        )
                       )}
                     </select>
                   </label>
@@ -983,6 +1155,7 @@ export default function AdminPage() {
                     Beschreibung
                     <textarea
                       value={dish.description}
+                      rows={3}
                       onChange={(event) =>
                         updateDish(
                           dish.id,
@@ -990,8 +1163,25 @@ export default function AdminPage() {
                           event.target.value
                         )
                       }
-                      placeholder="Beschreibung"
-                      rows={3}
+                    />
+                  </label>
+
+                  <label>
+                    Preis €
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.10"
+                      value={dish.price}
+                      onChange={(event) =>
+                        updateDish(
+                          dish.id,
+                          "price",
+                          Number(
+                            event.target.value
+                          )
+                        )
+                      }
                     />
                   </label>
 
@@ -1006,33 +1196,17 @@ export default function AdminPage() {
                           event.target.value
                         )
                       }
-                      placeholder="🍽️"
-                    />
-                  </label>
-
-                  <label>
-                    Preis in Euro
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.10"
-                      value={dish.price}
-                      onChange={(event) =>
-                        updateDish(
-                          dish.id,
-                          "price",
-                          Number(event.target.value)
-                        )
-                      }
                     />
                   </label>
                 </div>
 
-                <div className="dish-options">
-                  <label className="switch-label">
+                <div className="options">
+                  <label>
                     <input
                       type="checkbox"
-                      checked={dish.active !== false}
+                      checked={
+                        dish.active !== false
+                      }
                       onChange={(event) =>
                         updateDish(
                           dish.id,
@@ -1044,10 +1218,12 @@ export default function AdminPage() {
                     Sichtbar
                   </label>
 
-                  <label className="switch-label">
+                  <label>
                     <input
                       type="checkbox"
-                      checked={dish.vegetarian === true}
+                      checked={
+                        dish.vegetarian === true
+                      }
                       onChange={(event) =>
                         updateDish(
                           dish.id,
@@ -1059,10 +1235,12 @@ export default function AdminPage() {
                     Vegetarisch
                   </label>
 
-                  <label className="switch-label">
+                  <label>
                     <input
                       type="checkbox"
-                      checked={dish.vegan === true}
+                      checked={
+                        dish.vegan === true
+                      }
                       onChange={(event) =>
                         updateDish(
                           dish.id,
@@ -1074,10 +1252,12 @@ export default function AdminPage() {
                     Vegan
                   </label>
 
-                  <label className="switch-label">
+                  <label>
                     <input
                       type="checkbox"
-                      checked={dish.spicy === true}
+                      checked={
+                        dish.spicy === true
+                      }
                       onChange={(event) =>
                         updateDish(
                           dish.id,
@@ -1090,46 +1270,37 @@ export default function AdminPage() {
                   </label>
                 </div>
 
-                <div className="dish-admin-actions">
+                <div className="dish-actions">
                   <button
-                    className="button outline compact"
+                    className="button outline small"
                     type="button"
-                    onClick={() => duplicateDish(dish)}
+                    onClick={() =>
+                      duplicateDish(dish)
+                    }
                   >
                     Duplizieren
                   </button>
 
                   <button
-                    className="delete-button"
+                    className="danger small"
                     type="button"
                     onClick={() =>
-                      deleteDish(dish.id, dish.name)
+                      deleteDish(
+                        dish.id,
+                        dish.name
+                      )
                     }
                   >
-                    Gericht löschen
+                    Löschen
                   </button>
                 </div>
               </article>
             ))}
-
-            {!filteredDishes.length && (
-              <div className="admin-empty-state">
-                <span>🍽️</span>
-                <h3>Keine Gerichte gefunden</h3>
-                <p>
-                  Ändere den Filter oder füge ein neues Gericht hinzu.
-                </p>
-              </div>
-            )}
           </div>
         </section>
 
         <section className="admin-card">
           <h2>Sicherung</h2>
-          <p>
-            Speichere Einstellungen, Kategorien und Gerichte als Datei
-            oder lade sie später wieder ein.
-          </p>
 
           <div className="admin-actions">
             <button
@@ -1143,7 +1314,9 @@ export default function AdminPage() {
             <button
               className="button outline"
               type="button"
-              onClick={() => importRef.current?.click()}
+              onClick={() =>
+                importRef.current?.click()
+              }
             >
               Sicherung laden
             </button>
@@ -1158,233 +1331,439 @@ export default function AdminPage() {
           </div>
         </section>
 
-        <div className="admin-bottom">
+        <div className="save-bar">
+          <span>
+            {isDirty
+              ? "Änderungen noch nicht gespeichert"
+              : "Alles gespeichert ✓"}
+          </span>
+
           <button
             className="button primary"
             type="button"
+            disabled={saving}
             onClick={save}
           >
-            Änderungen speichern
-          </button>
-
-          <button
-            className="button outline"
-            type="button"
-            onClick={resetEverything}
-          >
-            Zurücksetzen
+            {saving
+              ? "Speichert …"
+              : "Änderungen online speichern"}
           </button>
         </div>
-
-        <p className="admin-warning">
-          <b>Wichtig:</b> Diese Datei speichert aktuell im Browser dieses
-          Geräts. Damit Änderungen automatisch auf allen Geräten und
-          online erscheinen, muss dieser Admin-Bereich anschließend mit
-          Supabase verbunden werden.
-        </p>
       </div>
 
-      <style jsx global>{`
-        .admin-subtitle {
-          margin: 8px 0 0;
-          color: #6f675d;
-          font-size: 14px;
-        }
-
-        .category-create-form {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
-          gap: 12px;
-          margin-top: 20px;
-        }
-
-        .category-create-form input,
-        .dish-admin-toolbar input,
-        .dish-admin-toolbar select,
-        .admin-dish-fields select,
-        .admin-dish-fields textarea {
-          width: 100%;
-          border: 1px solid #ded7cd;
-          border-radius: 12px;
-          background: #fff;
-          padding: 12px 14px;
-          font: inherit;
-        }
-
-        .category-manager-list {
-          display: grid;
-          gap: 10px;
-          margin-top: 20px;
-        }
-
-        .category-manager-item {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 18px;
-          padding: 14px 16px;
-          border: 1px solid #e7dfd3;
-          border-radius: 14px;
-          background: #fffdf9;
-        }
-
-        .category-manager-item > div:first-child {
-          display: grid;
-          gap: 3px;
-        }
-
-        .category-manager-item small {
-          color: #7b7268;
-        }
-
-        .category-manager-actions,
-        .dish-admin-actions,
-        .dish-options {
-          display: flex;
-          align-items: center;
-          flex-wrap: wrap;
-          gap: 10px;
-        }
-
-        .button.compact {
-          min-height: 38px;
-          padding: 8px 13px;
-          font-size: 13px;
-        }
-
-        .delete-button:disabled {
-          cursor: not-allowed;
-          opacity: 0.45;
-        }
-
-        .dish-admin-toolbar {
-          display: grid;
-          grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.6fr);
-          gap: 14px;
-          margin: 22px 0 10px;
-        }
-
-        .dish-admin-toolbar label,
-        .admin-dish-fields label {
-          display: grid;
-          gap: 7px;
-          color: #51493f;
-          font-size: 13px;
-          font-weight: 800;
-        }
-
-        .dish-result-count {
-          color: #756c62;
-          font-size: 14px;
-        }
-
-        .admin-dish.improved {
-          display: grid;
-          grid-template-columns: 150px minmax(0, 1fr);
-          gap: 18px;
-          align-items: start;
-        }
-
-        .admin-dish-fields {
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 12px;
-        }
-
-        .admin-dish-fields .wide {
-          grid-column: 1 / -1;
-        }
-
-        .admin-dish-fields textarea {
-          min-height: 88px;
-          resize: vertical;
-        }
-
-        .dish-options,
-        .dish-admin-actions {
-          grid-column: 2;
-        }
-
-        .dish-admin-actions {
-          justify-content: flex-end;
-          padding-top: 4px;
-          border-top: 1px solid #eee7dc;
-        }
-
-        .small-remove-image {
-          width: 100%;
-          margin-top: 7px;
-          border: 0;
-          background: transparent;
-          color: #a3362d;
-          cursor: pointer;
-          font-size: 12px;
-          font-weight: 800;
-        }
-
-        .admin-empty-state {
-          padding: 46px 20px;
-          text-align: center;
-          border: 1px dashed #d9cdbd;
-          border-radius: 16px;
-          background: #fffcf7;
-        }
-
-        .admin-empty-state span {
-          font-size: 40px;
-        }
-
-        .admin-empty-state h3 {
-          margin: 10px 0 5px;
-        }
-
-        .admin-empty-state p {
-          margin: 0;
-          color: #766d63;
-        }
-
-        @media (max-width: 780px) {
-          .category-create-form,
-          .dish-admin-toolbar,
-          .admin-dish.improved {
-            grid-template-columns: 1fr;
-          }
-
-          .category-manager-item {
-            align-items: flex-start;
-            flex-direction: column;
-          }
-
-          .category-manager-actions {
-            width: 100%;
-          }
-
-          .category-manager-actions button {
-            flex: 1;
-          }
-
-          .admin-dish-fields {
-            grid-template-columns: 1fr;
-          }
-
-          .admin-dish-fields .wide {
-            grid-column: auto;
-          }
-
-          .dish-options,
-          .dish-admin-actions {
-            grid-column: 1;
-          }
-
-          .dish-admin-actions {
-            justify-content: stretch;
-          }
-
-          .dish-admin-actions button {
-            flex: 1;
-          }
-        }
-      `}</style>
+      <AdminStyles />
     </main>
+  );
+}
+
+function AdminStyles() {
+  return (
+    <style jsx global>{`
+      * {
+        box-sizing: border-box;
+      }
+
+      .admin-shell {
+        min-height: 100vh;
+        background: #f5f1ea;
+        color: #261f19;
+        padding: 30px 18px 120px;
+      }
+
+      .admin-page {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+
+      .admin-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 24px;
+        align-items: flex-start;
+        margin-bottom: 24px;
+      }
+
+      .admin-header h1 {
+        margin: 4px 0;
+        font-size: 34px;
+      }
+
+      .admin-eyebrow {
+        margin: 0;
+        color: #b36b00;
+        font-size: 13px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .admin-subtitle {
+        margin: 8px 0 0;
+        color: #746b62;
+      }
+
+      .admin-actions,
+      .row-actions,
+      .dish-actions,
+      .options {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .admin-card {
+        background: #ffffff;
+        border: 1px solid #e5ddd2;
+        border-radius: 20px;
+        padding: 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 8px 28px rgba(50, 35, 20, 0.04);
+      }
+
+      .admin-card h2 {
+        margin-top: 0;
+      }
+
+      .admin-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .admin-grid .wide,
+      .dish-fields .wide {
+        grid-column: 1 / -1;
+      }
+
+      label {
+        display: grid;
+        gap: 7px;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid #ddd4c8;
+        border-radius: 12px;
+        background: white;
+        padding: 12px 14px;
+        font: inherit;
+        color: #261f19;
+      }
+
+      textarea {
+        resize: vertical;
+      }
+
+      .button,
+      .danger {
+        border-radius: 11px;
+        border: 0;
+        padding: 11px 16px;
+        cursor: pointer;
+        font-weight: 800;
+        text-decoration: none;
+        font-size: 14px;
+      }
+
+      .button.primary {
+        background: #b36b00;
+        color: white;
+      }
+
+      .button.outline {
+        border: 1px solid #d8cec1;
+        background: white;
+        color: #32291f;
+      }
+
+      .button.full {
+        width: 100%;
+      }
+
+      .button.small,
+      .danger.small {
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      .danger {
+        background: #fff0ee;
+        color: #a32b20;
+      }
+
+      .danger:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: wait;
+      }
+
+      .admin-message {
+        max-width: 1180px;
+        margin: 0 auto 18px;
+        background: #fff7dd;
+        border: 1px solid #e7d19b;
+        border-radius: 12px;
+        padding: 12px 16px;
+      }
+
+      .image-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px;
+      }
+
+      .image-box {
+        border: 1px solid #e6ded3;
+        border-radius: 16px;
+        padding: 16px;
+      }
+
+      .image-box img,
+      .image-placeholder {
+        width: 100%;
+        height: 220px;
+        object-fit: contain;
+        border-radius: 12px;
+        background: #f7f3ed;
+      }
+
+      .image-placeholder {
+        display: grid;
+        place-items: center;
+        color: #8c8379;
+      }
+
+      .upload-button,
+      .upload-small {
+        margin-top: 12px;
+        display: inline-flex;
+        justify-content: center;
+        cursor: pointer;
+        border-radius: 10px;
+        background: #f0e7db;
+        padding: 10px 14px;
+      }
+
+      .upload-button input,
+      .upload-small input {
+        display: none;
+      }
+
+      .category-form {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 12px;
+      }
+
+      .category-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 18px;
+      }
+
+      .category-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 15px;
+        padding: 13px 15px;
+        border: 1px solid #ebe4da;
+        border-radius: 12px;
+      }
+
+      .category-item > div:first-child {
+        display: grid;
+        gap: 3px;
+      }
+
+      .category-item small {
+        color: #7a7168;
+      }
+
+      .section-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 18px;
+      }
+
+      .section-head p {
+        color: #786f66;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr 300px;
+        gap: 12px;
+        margin: 20px 0 8px;
+      }
+
+      .result-count {
+        color: #7b7268;
+        font-size: 13px;
+      }
+
+      .dish-list {
+        display: grid;
+        gap: 15px;
+      }
+
+      .dish-card {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 18px;
+        border: 1px solid #e7dfd5;
+        border-radius: 16px;
+        padding: 16px;
+        background: #fffdf9;
+      }
+
+      .dish-image {
+        grid-row: span 3;
+      }
+
+      .dish-image img,
+      .dish-image > span {
+        width: 140px;
+        height: 110px;
+        border-radius: 12px;
+        object-fit: cover;
+        background: #f2ece4;
+      }
+
+      .dish-image > span {
+        display: grid;
+        place-items: center;
+        font-size: 40px;
+      }
+
+      .dish-fields {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .options label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+      }
+
+      .options input {
+        width: auto;
+      }
+
+      .dish-actions {
+        justify-content: flex-end;
+        border-top: 1px solid #eee7dd;
+        padding-top: 12px;
+      }
+
+      .save-bar {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(1120px, calc(100% - 32px));
+        background: #261f19;
+        color: white;
+        border-radius: 16px;
+        padding: 12px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 15px;
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.22);
+        z-index: 50;
+      }
+
+      .admin-login {
+        max-width: 420px;
+        margin: 70px auto;
+        background: white;
+        padding: 30px;
+        border-radius: 20px;
+        border: 1px solid #e1d8cc;
+        box-shadow: 0 15px 50px rgba(50, 30, 10, 0.08);
+      }
+
+      .admin-login h1 {
+        margin-bottom: 6px;
+      }
+
+      .admin-login p {
+        color: #746b62;
+      }
+
+      .admin-login a {
+        display: block;
+        margin-top: 18px;
+        text-align: center;
+        color: #8a5500;
+      }
+
+      .admin-logo {
+        width: 52px;
+        height: 52px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #b36b00;
+        color: white;
+        font-weight: 900;
+        font-size: 26px;
+      }
+
+      @media (max-width: 800px) {
+        .admin-header,
+        .section-head,
+        .category-item {
+          flex-direction: column;
+        }
+
+        .admin-grid,
+        .image-grid,
+        .toolbar,
+        .dish-card,
+        .dish-fields,
+        .category-form {
+          grid-template-columns: 1fr;
+        }
+
+        .dish-image {
+          grid-row: auto;
+        }
+
+        .dish-image img,
+        .dish-image > span {
+          width: 100%;
+          height: 190px;
+        }
+
+        .admin-grid .wide,
+        .dish-fields .wide {
+          grid-column: auto;
+        }
+
+        .admin-actions {
+          width: 100%;
+        }
+
+        .save-bar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+      }
+    `}</style>
   );
 }
