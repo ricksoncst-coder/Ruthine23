@@ -100,7 +100,7 @@ export default function Home() {
     setOrderOpen(true);
   }
 
-  function submitOrder(event: FormEvent<HTMLFormElement>) {
+  async function submitOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!cart.length) {
@@ -193,18 +193,44 @@ export default function Home() {
       "Vielen Dank!",
     ].join("\n");
 
-    window.open(
-      `https://wa.me/${settings.whatsapp.replace(/\D/g, "")}?text=${encodeURIComponent(message)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
+    const { error: orderError } = await supabase.from("orders").insert({
+      customer_name: name,
+      phone: phone,
+      order_type: orderType,
+      order_date: date,
+      order_time: time,
+      street: orderType === "delivery" ? street : null,
+      postal_code: orderType === "delivery" ? postalCode : null,
+      city: orderType === "delivery" ? city : null,
+      doorbell:
+        orderType === "delivery"
+          ? String(data.get("doorbell") || "").trim()
+          : null,
+      items: cart.map((item) => ({
+        id: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity,
+      })),
+      subtotal: subtotal,
+      delivery_fee: orderType === "delivery" ? deliveryFee : 0,
+      total: orderType === "delivery" ? finalTotal : subtotal,
+      note: note || null,
+      status: "new",
+      printed: false,
+    });
 
+    if (orderError) {
+      console.error("Bestellung konnte nicht gespeichert werden:", orderError);
+      flash("Bestellung konnte nicht gesendet werden.");
+      return;
+    }
     setCart([]);
     setOrderOpen(false);
     setCartOpen(false);
     setDeliveryZoneId("");
     setOrderType("pickup");
-    flash("Die Bestellung wurde für WhatsApp vorbereitet.");
+    flash("Bestellung erfolgreich gesendet.");
   }
 
   function submitReservation(event: FormEvent<HTMLFormElement>) {
@@ -313,7 +339,7 @@ export default function Home() {
       <div className="container premium-hero-inner">
         <div className="premium-hero-copy">
           <p className="premium-kicker">Authentisch · Frisch · Aromatisch</p>
-          <h1>{settings.heroTitle || settings.name}</h1>
+          <h1>Indisches Restaurant in Sittensen</h1>
           <p className="premium-hero-name">{settings.name}</p>
           <p className="premium-hero-text">{settings.slogan}</p>
 
@@ -385,7 +411,7 @@ export default function Home() {
 
           {orderType === "pickup" && <div className="cart-total"><span>Gesamt</span><b>{euro.format(subtotal)}</b></div>}
 
-          <button className="button primary full" type="submit">Per WhatsApp bestellen</button>
+          <button className="button primary full" type="submit">Jetzt bestellen</button>
           <p className="cart-note">Die Bestellung wird in WhatsApp geöffnet und erst nach dem Absenden übermittelt.</p>
         </form>
       </aside>
