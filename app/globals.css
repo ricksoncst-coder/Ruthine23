@@ -1383,3 +1383,11 @@ footer {
   font-weight: 700;
   border-radius: 14px;
 }
+
+/* Speisenbilder: schnelles Lazy Loading */
+img.dish-photo {
+  width: 100%;
+  display: block;
+  object-fit: cover;
+  object-position: center;
+}
