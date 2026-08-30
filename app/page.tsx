@@ -37,6 +37,7 @@ export default function Home() {
   const [orderType, setOrderType] = useState<OrderType>("pickup");
   const [deliveryZoneId, setDeliveryZoneId] = useState("");
   const [notice, setNotice] = useState("");
+  const [orderStatusMessage, setOrderStatusMessage] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -193,7 +194,7 @@ export default function Home() {
       "Vielen Dank!",
     ].join("\n");
 
-    const { error: orderError } = await supabase.from("orders").insert({
+    const { data: orderData, error: orderError } = await supabase.from("orders").insert({
       customer_name: name,
       phone: phone,
       order_type: orderType,
@@ -218,12 +219,43 @@ export default function Home() {
       note: note || null,
       status: "new",
       printed: false,
-    });
+    }).select("id, restaurant_status, accepted_time, preparation_minutes").single();
 
     if (orderError) {
       console.error("Bestellung konnte nicht gespeichert werden:", orderError);
       flash("Bestellung konnte nicht gesendet werden.");
       return;
+    }
+
+    if (orderData?.id) {
+      localStorage.setItem("lastOrderId", String(orderData.id));
+      setOrderStatusMessage("⏳ Bestellung gesendet – wartet auf Bestätigung");
+
+      const checkStatus = setInterval(async () => {
+        const { data: statusData, error: statusError } = await supabase
+          .from("orders")
+          .select("restaurant_status, accepted_time, preparation_minutes")
+          .eq("id", orderData.id)
+          .single();
+
+        if (statusError || !statusData) return;
+
+        if (statusData.restaurant_status === "accepted") {
+          const timeText = statusData.accepted_time
+            ? ` – bestätigt für ${statusData.accepted_time} Uhr`
+            : statusData.preparation_minutes
+              ? ` – ca. ${statusData.preparation_minutes} Minuten`
+              : "";
+
+          setOrderStatusMessage(`✅ Bestellung angenommen${timeText}`);
+          clearInterval(checkStatus);
+        }
+
+        if (statusData.restaurant_status === "rejected") {
+          setOrderStatusMessage("❌ Bestellung konnte leider nicht angenommen werden.");
+          clearInterval(checkStatus);
+        }
+      }, 3000);
     }
     setCart([]);
     setOrderOpen(false);
@@ -948,5 +980,10 @@ export default function Home() {
     `}</style>
 
     {notice && <div className="toast">{notice}</div>}
+    {orderStatusMessage && (
+      <div className="toast order-status">
+        {orderStatusMessage}
+      </div>
+    )}
   </main>;
 }
