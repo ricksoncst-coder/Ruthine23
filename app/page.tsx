@@ -218,9 +218,9 @@ export default function Home() {
       total: orderType === "delivery" ? finalTotal : subtotal,
       note: note || null,
       status: "new",
+      restaurant_status: "pending",
       printed: false,
     }).select("id, restaurant_status, accepted_time, preparation_minutes").single();
-
     if (orderError) {
       console.error("Bestellung konnte nicht gespeichert werden:", orderError);
       flash("Bestellung konnte nicht gesendet werden.");
